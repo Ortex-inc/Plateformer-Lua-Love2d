@@ -1,24 +1,39 @@
 -- macros
-
-width = 700
+width = 710
 height = 540
-path =  "assets/all/"
+path =  "assets/"
+PATH = ""
+--color pallets
+white = {1, 1, 1}
+black = {0, 0, 0}
+gray = {0.5,0.5,0.5}
+orange = {0.992,0.8,0}
+background = {1,0.98,0.89}
 
 -- attractive forces
 g = 0.85
-f = 1.34
+f = 1.4
 
+--fonts
 default = love.graphics.newFont("retro.ttf", 16)
 big = love.graphics.newFont("retro.ttf", 30)
 
-canvas = love.graphics.newCanvas( width, height )
---love.graphics.setCanvas(canvas)
-  
+function correction (tmap)
+--adapt the display
+	local ratio = {x = nil , y = nil}
+	ratio.x = width / (tmap.row * tmap.tile)
+	ratio.y = height / (tmap.line * tmap.tile)
+	for _,e in ipairs(tmap.element) do
+		e.ox = ratio.x
+		e.oy = ratio.y
+		e.x = e.x * e.ox
+	end
+end
+
 -- POO simulation
 function new(orig)
-    local orig_type = type(orig)
     local copy
-    if orig_type == 'table' then
+    if type(orig) == 'table' then
         copy = {}
         for orig_key, orig_value in next, orig, nil do
             copy[new(orig_key)] = new(orig_value)
@@ -32,16 +47,16 @@ end
 --end
 filtre = {}
 filtre.retro = love.graphics.newShader [[
-vec4 effect( vec4 color, Image texture, vec2 texture_coords, vec2 screen_coords ){
-  vec4 pixel = Texel(texture, texture_coords );
-  
-  //This is the current pixel color
-  number average = (pixel.r+pixel.b+pixel.g)/3.0;
-  pixel.r = average;
-  pixel.g = average;
-  pixel.b = average;
-  return pixel;
-}
+	vec4 effect( vec4 color, Image texture, vec2 texture_coords, vec2 screen_coords ){
+	  vec4 pixel = Texel(texture, texture_coords );
+	  
+	  //This is the current pixel color
+	  number average = (pixel.r+pixel.b+pixel.g)/3.0;
+	  pixel.r = average;
+	  pixel.g = average;
+	  pixel.b = average;
+	  return pixel;
+	}
 ]]
 function filtre.apply(this,condition)
 if condition then love.graphics.setShader(this) end
@@ -49,12 +64,13 @@ end
 function filtre.finish(condition)
 	if condition then love.graphics.setShader() end
 end
-
+memory = {}
+sound = { win = "sfx/win.ogg" , jump = "sfx/jump.ogg", gameover = "sfx/gameover.ogg" , lose = "sfx/lose.ogg", getkey = "sfx/getkey.ogg"}
 menu = {start = {} , fail = {} }
 
-game = { init = nil , charge = nil ,update = nil, draw = nil , stat = "inGame"}  
+game = { init = nil , load = nil ,update = nil, draw = nil,save = nil, stat = "home" , current = 1 }  
 
-memory = {}
+
 
 map = {x = 0 ,y = 0 ,w = 0 , h = 0,line = 0 , row = 0 ,tile = 32, element = {} , method = {} }
 
@@ -74,6 +90,23 @@ function addAbility(d, s)
 	end
 end
 ---------------------------------------
+effect = {}
+effect.sound = nil
+effect.start = true
+
+effect.load = function (self , str) 
+	if self.sound == nil then
+	self.sound = love.audio.newSource(str,'static')
+	self.sound:setVolume(0.1)
+	end
+end
+effect.stop = function(self) self.sound:stop()  end
+effect.go = function(self,loop)
+	if (self.start or loop)and not self.sound:isPlaying() then 
+		self.sound:play() 
+	 end
+end
+----
 timer = {}
 timer.time = 1.5
 timer.init = function(self) self.time = 1.5 end 
@@ -166,23 +199,26 @@ end
 adner.permission = function(self,action)
 
 	if self.life then 
-	
-	if self.stat == "stand" then
-	 return action == "jump" or action == "walk" 
-	end
-	
-	if self.stat == "jump" then
-	 return action == "walk"
-	end
+		if self.stat == "stand" then
+			self.old = "stand"
+		 	return action == "jump" or action == "walk" 
+		end
 
-	if self.stat == "fall" then
-	 return action == "walk"
-	end
-	if self.stat == "walk" then 
-	return action == "walk" 
-	end
-	
-	end
+		if self.stat == "jump" then
+			self.old = "jump"
+		 	return action == "walk"
+		end
+
+		if self.stat == "fall" then
+			self.old = "fall"
+		 	return action == "walk"
+		end
+		
+		if self.stat == "walk" then 
+			self.old = "stand"
+			return action == "walk" 
+		end
+end
 
 	return false
 end
@@ -207,37 +243,59 @@ end
 
 adner.run = function(self,s)
 	self.speed.x = self.speed.x * f
-	self.x = self.x + s * self.step
+	self.x = self.x + s * self.step / 1.2
 end
 -----------
 	clip = {}
 	clip.currentTime = 0
-	
+	clip.old = ""
 	clip.animation = function(m,line, duration,dt)
 		m.currentTime = m.currentTime + dt
 		if m.currentTime >= duration then
 		    m.currentTime = m.currentTime - duration 
 			local x,y,w,h = m.quad:getViewport()
 			local sw,sh = memory[m.img]:getDimensions()
-			if x + w >= sw then x = 0 else  x = x + w end
+
+			if x + w >= sw or m.stat ~= m.old then x = 0 ; m.old = m.stat else  x = x + w end
 			m.setQuad(x, (line-1) * h ,w, h , m)
 		end
 	end
 	
 	clip.manager = function(m,dt)
-		if m.stat == "dead"  then stat.dead = true end
+
 		if m.stat == "stand" then
 			m.animation(m,1,0.3,dt)
+			m.start = true
+			m.sound = nil
+
 		elseif m.stat == "jump" then 
 			m.jump(m)
 			m.setQuad(0,m.h,m.w,m.h,m)
+			m.load(m,sound.jump)
+			m.go(m,false)
+		
 		elseif m.stat == "fall" and m.speed.y <= 2 then 
 			m.setQuad(m.w*2,m.h,m.w,m.h,m)
 		elseif m.stat == "fall" then 
 			m.setQuad(m.w,m.h,m.w,m.h,m)
+
 		elseif m.stat == "dead" then 
 			m.animation(m,3,0.4,dt)
+			stat.dead = true
+			m.load(m,sound.lose)
+			m.go(m,false)
 		end
+		if m.old ~= m.stat  then
+			 m.start = true
+			 m.sound = nil
+			 m.old = m.stat
+		end
+		if m.stat == "fall" then
+			 if (m.x < -m.w or m.x > width)
+			 or (m.y < (-3 * m.h)  or m.y > height) then
+			 	m.stat = "dead"
+			 end
+		end	
 	end
 ------------------------
 	stat = new(elm)
@@ -248,9 +306,9 @@ end
 	end
 	stat.update = function(self)
 		if self.win then 
-			textBox.init("Win" ,true,textBox)
+			textBox.init("Win !" ,true,textBox)
 		elseif self.dead then
-			textBox.init("Dead" ,true,textBox)
+			textBox.init("Dead =(" ,true,textBox)
 		end
 	end
 	
@@ -271,12 +329,12 @@ end
 				 then self.can.right = inTable(e.img , ground)
 			end
 		end
-		
+		-- orientations
 		if self.dir == -1 then
-			if not self.can.left then self.dir = 1 ; self.ox = -1  end
+			if not self.can.left then self.dir = 1 ; self.ox = -self.ox  end
 		end
 		if self.dir == 1 then
-			if not self.can.right then self.dir = -1 ; self.ox = 1  end
+			if not self.can.right then self.dir = -1 ; self.ox = -self.ox  end
 		end
 	end
 	
@@ -321,29 +379,25 @@ end
 	
 	textBox.draw = function(self)
 	if self.show and self.time > 0 then
-
-	local w = self.w * self.ox 
-	local h = self.h * self.oy 
-	love.graphics.setColor( 0, 0, 0, 255 )
-	love.graphics.rectangle("fill",self.x , self.y ,w,h)
-	love.graphics.setColor( 255, 255, 255, 255 )
 	love.graphics.setFont(big)
-	love.graphics.printf(self.content, self.x + w/2 - big:getWidth(self.content)/2 , self.y + h/2 - big:getHeight(self.content)/2 , 1, "left")
+	local w =  math.max(self.w, big:getWidth(self.content))
+	local h =  math.max(self.h,big:getHeight(self.content) * 2)
+	love.graphics.setColor(black)
+	love.graphics.rectangle("fill",self.x , self.y ,w,h)
+	love.graphics.setColor(white)
+	love.graphics.print({white,self.content}, self.x + w/2 - big:getWidth(self.content)/2 , self.y + h/2 - big:getHeight(self.content))
 		love.graphics.setFont(default)
+
 		end
 	end
 
-
-
 particle = {}
-particle.color = "black"
 particle.to_x = 0
 particle.to_y = 0
 particle.x = 100
 particle.y = 100
 
 particle.generate = function(self,angle)
-	math.randomseed(os.time())
 	local radius = 64
 	local pi = 3.1415
 	local angle = angle * pi / 180
@@ -363,12 +417,12 @@ end
 
 particle.draw = function(self)
 	local p = 8
-	love.graphics.setColor(253,204,0,255)
+	love.graphics.setColor(orange)
 	love.graphics.rectangle("fill",self.x,self.y,p,p)
 	love.graphics.rectangle("fill",self.x+p ,self.y-p ,p ,p)
 	love.graphics.rectangle("fill",self.x+p, self.y+p ,p ,p)
 	love.graphics.rectangle("fill",self.x + 2*p ,self.y ,p ,p)
-	love.graphics.setColor(255,255,255,255)
+	love.graphics.setColor(white)
 end
 
 	manifest = {}
@@ -418,11 +472,11 @@ end
 dust.draw = function(self)
 	if self.time < 0.3 then
 	local p = 8
-	love.graphics.setColor(120,120,120,255)
+	love.graphics.setColor(gray)
 	love.graphics.rectangle("fill",self.x,self.y,p,p)
 	love.graphics.rectangle("fill",self.x+p ,self.y-p ,p ,p)
 	love.graphics.rectangle("fill",self.x + 2*p ,self.y ,p ,p)
-	love.graphics.setColor(255,255,255,255)
+	love.graphics.setColor(white)
 	end
 end
 ---------------------------------
@@ -463,8 +517,8 @@ map.method.draw = function (mem, self)
 	for _,k in ipairs(self.element) do
 		if not (k.img == "" or k.img == nil ) then 
 			if mem[k.img] ~= nil then
-				local fix_x = k.x if k.ox == -1 then fix_x = k.x  + k.w end
-				local fix_y = k.y if k.oy == -1 then fix_y = k.y  + k.h end
+				local fix_x = k.x if k.ox < 0 then fix_x = k.x  - k.w * k.ox end
+				local fix_y = k.y if k.oy < 0 then fix_y = k.y  - k.h * k.oy end
 				love.graphics.draw( mem[k.img] ,k.quad, fix_x ,fix_y ,0 ,k.ox ,k.oy)
 			end 
 		end		
@@ -486,12 +540,13 @@ button.method.onclick = function(self,mouse,callback)
 end
 button.method.draw = function(self)
 	love.graphics.setFont(default)
-	local w = self.w * self.ox 
+	local w = math.max(self.w , default:getWidth(self.label)) * self.ox 
 	local h = self.h * self.oy 
-	love.graphics.setColor( 0, 0, 0, 255 )
+	love.graphics.setColor(black)
 	love.graphics.rectangle("fill",self.x , self.y ,w,h)
-	love.graphics.setColor( 255, 255, 255, 255 )
-	love.graphics.printf(self.label, self.x + w/2 - default:getWidth(self.label)/2 , self.y, 0, "left")
+	love.graphics.setColor(white)
+	love.graphics.print({white,self.label}, self.x + w/2 - default:getWidth(self.label)/2 , self.y)
+
 end
 ---------------------------------
 function detection (l,m) 
@@ -569,7 +624,7 @@ function interact(l,map)
 			if (e.img == path.."exclamation.png") and
 			detection(l,e)
 			then
-				textBox.init("Welcome",false,textBox)
+				textBox.init("Welcome\nlevel: "..game.current,false,textBox)
 				textBox.show = true
 			end	
 			if (e.img == path.."helper.png") then
@@ -614,6 +669,7 @@ function manager(b)
 			b.y = math.min ( (b.y + b.step ) , height - b.h)
 		end
 	end
+	 
 end
 
 function gravity(b)
@@ -635,14 +691,15 @@ function split(s, delimiter)
 end
 
 function readAll(file)
-    local f = assert(io.open(file, "rb"))
-    local content = f:read("*all")
-    f:close()
-    return content
+	local f, _ = love.filesystem.load( file )
+	if f == nil then return nil end
+	return f()
 end
 ----------- import map & load resource to memory associative table
+
 function import(mem, file)
 	local tab = readAll(file)
+	if tab == nil then print("E: File not exist or not readable") end
 	tab = split(tab,'@')
 	local array = new(map)
 	array.method.init(22,17,32,array)
@@ -656,6 +713,34 @@ function import(mem, file)
 		end
 	end
 	return array
+end
+------
+function loadStage ()
+	game.current = readAll("game.sav") 
+	local stage = "map/map"..game.current..".tlx"
+	return import(memory, stage)
+	end
+	
+function saveStage(current)
+	if game.save == nil then
+	start.play.label = "Play"
+	
+	if stat.win then
+	start.play.label = "Next"
+	game.current = readAll("game.sav") + 1
+	end
+
+	if readAll(PATH.."map/map"..game.current..".tlx") == nil 
+	and stat.win and game.stat == "home" then
+		start.play.label = "Begin"
+		game.current = 1
+	end
+
+	local data = "return "..game.current
+	local size = string.len(data)
+	_, _ = love.filesystem.write( "game.sav", data, size )
+	game.save = true
+	end
 end
 ------
 function search(sprite, source)
@@ -710,7 +795,7 @@ menu.home = function()
 	
 	start.exit.method.init("Quit",width/2-100/2,250,80,25,start.exit)
 
-	start.inf.method.init("Developped_by_Ortex-inc_2018",width/2 - 300/2 ,height -25,300,25,start.inf)
+	start.inf.method.init("Developped by Ortex-inc 2018",width/2 - 300/2 ,height -25,300,25,start.inf)
 	
 	addAbility(start.play , scaling)
 	addAbility(start.exit , scaling)
@@ -721,11 +806,18 @@ menu.update = function(dt)
 	mouse.method.update(mouse)
 	
 	if game.stat == "home" then
-	start.play.method.onclick (start.play,mouse,(function() cleanup({tmap.element, memory}) ; game.charge() end) ) 	
-	start.exit.method.onclick (start.exit,mouse,(function() cleanup({tmap.element, memory}) ; love.event.quit() end) ) 	
+		menu.load(menu,sound.win)
+		menu.go(menu,true)
+		local toClean = {} 
+		if tmap == nil then  toClean = { memory } else toClean = {tmap.element}  end
+	start.play.method.onclick (start.play,mouse,(function() cleanup(toClean) ; game.load() end) ) 	
+	start.exit.method.onclick (start.exit,mouse,(function() cleanup(toClean) ; love.event.quit() end) ) 	
 	
 	elseif game.stat == "retry" then
-	fail.retry.method.onclick (fail.retry,mouse,(function() cleanup({tmap.element, memory}) ; game.charge() end) ) 	
+	menu.load(menu,sound.gameover)
+
+	menu.go(menu,true)
+	fail.retry.method.onclick (fail.retry,mouse,(function() cleanup({tmap.element, memory}) ; game.load() end) ) 	
 	fail.back.method.onclick (fail.back,mouse,(function() game.stat = "home" end) ) 	
 	end
 	start.exit.on(start.exit, dt)
@@ -755,18 +847,21 @@ game.draw = function()
 	textBox.draw(textBox)
 end
 
-game.charge = function()
+game.load = function()
+
 	game.stat = "inGame"
+	game.save = nil
 	stat.init(stat)
 	timer.init(timer)
-	textBox.show = false
 	
-	tmap = import(memory,"map.tlx")
+	tmap = loadStage()
+	
 	hero = search( path.."hero.png" , tmap )
 	hero = hero[1]
 	addAbility(hero, input)
 	addAbility(hero , adner)
 	addAbility(hero , clip)
+	addAbility(hero , effect)
 	
 	apples = search(path.."apple.png" , tmap)
 	apple = {}
@@ -776,24 +871,31 @@ game.charge = function()
 	end
 	
 	apple.check = function(self,dt,tmap)
-		if self.token then
+		if self.token and self.img ~= ""  then
+		self.load(self, sound.win)
 		if not self.play(self,dt) then self.img = "" ; self.effect(self) end 
-		manifest.translate(manifest,dt)
+		manifest.translate(manifest,dt) ; self.go(self,false)
 
 		end
 	end
 	for _,e in ipairs (apples) do
 		addAbility(e,apple)
 		addAbility(e,fadein)
+		addAbility(e , effect)
 		manifest.init(manifest ,e.x ,e.y)
 	end
 
 	block = {}
 	block.broke = false
 	block.check = function(self,key,dt,tmap)
+
 		if key.token then
-			if not self.play(self,dt) then self.img = "" ; end 
+			key.check(key,dt,tmap)
+			if not self.play(self,dt) then self.img = "" end 
+			
 		end
+					
+
 	end
 	blocks = {}
 	blocks = search(path.."block.png", tmap)
@@ -831,19 +933,26 @@ game.charge = function()
 	keys = search(path.."key.png", tmap)
 	key = {}
 	key.token = false
+
 	key.effect = function(self)
 		ground = rmTable( path.."block.png",ground)
-		memory = rmTable(path.."block.png" ,memory)
+		--memory = rmTable(path.."block.png" ,memory)
 	end
 	key.check = function(self,dt,tmap)
-		if self.token then
-			if not self.play(self,dt) then self.img = "" ; self.effect(self) end 
+		if self.token  and self.img ~= "" then
+			self.load(self , sound.getkey)
+			if self.time == 0  then 
+			self.img = "" ; 
+			self.go(self,false) ; 
+			self.effect(self)
+			end
 		end
 	end
 	for _,e in ipairs (keys) do
 		addAbility(e,key)
 		addAbility(e,fadein)
 		addAbility(e,scaling)
+		addAbility(e , effect)
 	end
 		
 	enemies = search(path.."enemy.png" , tmap)
@@ -853,12 +962,13 @@ game.charge = function()
 		addAbility(e,intel)
 		addAbility(e,clip)
 		addAbility(e,crush)
-		e.stat = "walk"
+		e.stat = "stand"
 		e.check = function(self,tmap,dt)
-		if not self.life then self.play(self,dt) end 
 		if e.permission(e,"walk") then e.verify(e,tmap) ; e.walk(e) end
 		e.animation(e,1,0.3,dt)
-	end
+
+		if not self.life then self.play(self,dt) end 
+		end
 	end
 	helpers  = search(path.."helper.png", tmap)
 		for _,e  in ipairs(helpers) do
@@ -876,16 +986,16 @@ game.charge = function()
 	for _,e in ipairs(grasses) do
 		addAbility(e,clip)
 	end	
-
+	correction(tmap)
 end
 
 function love.load()
 
     love.window.setMode(width, height)
 	love.graphics.setDefaultFilter("nearest")
-	
+	addAbility(menu, effect)
 	menu.home()
-	game.charge()
+
 	
 end
 
@@ -894,7 +1004,7 @@ game.update = function(dt)
 	interact(hero,tmap) 
 	hero.manager(hero,dt)
 	gravity(hero)
-
+ 
 -- the problem here with enemmies 
 for _,e in ipairs(apples) do
 	e.check(e , dt, tmap)
@@ -902,7 +1012,8 @@ end
 
 for _,e in ipairs(keys) do
 	e.check(e , dt, tmap)
-	e.on(e,dt)
+ 	 if not e.token then e.on(e,dt)
+ 	 else e.play(e,dt) end
 end
 
 for _,e in ipairs(blocks) do
@@ -931,34 +1042,44 @@ for _,e in ipairs(helpers) do
 	e.animation(e,1,0.3,dt)
 	if dust.time == 0 then e.stat = "walk" ; dust.time = 0.3 end
 	local fix = e.x 
-	if e.dir == 1 then fix = e.x - 64 end 
+	if e.dir == 1 then fix = e.x -2 * e.w end 
 	if e.stat == "push" then dust.appear(dust,e.dir,dt)
 	else dust.init(dust,fix,e.y) 
 	end
 end
 
-stat.update(stat)
-	if stat.win == true then game.stat = "home" end
+	stat.update(stat)
+	if (stat.win or stat.dead) and timer.timeout(timer,dt) then 
+	
+	if stat.win == true then game.stat = "home" ;  end
 	if stat.dead == true then game.stat = "retry" end
+	end
+	if game.stat ~= "inGame" then 
+	saveStage(game.current) end
 	textBox.check(textBox,dt)
+	
 end
 
 function love.update(dt)
-	if game.stat == "inGame" or not timer.timeout(timer,dt) 
-	then game.update(dt) 
-	else menu.update(dt) end
+	if game.stat ~= "inGame" then
+		timer.time = 0
+	end
+	if game.stat == "inGame" and timer.time ~= 0
+	then game.update(dt) end
+	if game.stat ~= "inGame" and timer.time == 0 then menu.update(dt) end
 	
 	mouse.method.init(mouse)
 end
 
 function love.draw()
-	love.graphics.setBackgroundColor(255,251,229,255)	
-	if game.stat ~= "inGame" and  timer.time == 0 
-	then menu.draw() 
-	else game.draw() end
+	love.graphics.setBackgroundColor(background)	
+	if game.stat ~= "inGame" then menu.draw() end
+	
+	if game.stat == "inGame" then game.draw() end
 
 end
+
 function love.mousepressed(x, y, button, istouch)
-	mouse.leftClick = (button == 'l')  
-	mouse.rightClick = (button == 'r') 
+	mouse.leftClick = (button == 1)  
+	mouse.rightClick = (button == 2) 
 end
